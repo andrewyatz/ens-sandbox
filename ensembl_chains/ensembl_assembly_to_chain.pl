@@ -132,12 +132,13 @@ sub build_chain_mappings {
       $q_start = ($ori == 1) ? $current->{cmp_start} : $current->{cmp_end};
     }
 
-    # Can mean we are into a new chromsome, strand has swapped or we have run out of mappings
+    # Can mean we have run out of mappings, we are into a new chromsome or strand has swapped.
+    # Final reason is we've had an out-of-order meaning a negative gap was produced 
+    # (we're going backwards). In any situation this means the chain is finished
     if( ! defined $next || 
         $t_name ne $next->{asm_name} || 
         $ori != $next->{ori} ||
         $cmp_diff < 0) {
-      # $DB::single = 1;;
       # Add the last gap on which is just the length of this alignment
       push(@chain_gaps, [$current->{length}]);
       # Set the ends of the chain since this is the last block
