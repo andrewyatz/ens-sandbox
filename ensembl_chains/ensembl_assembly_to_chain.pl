@@ -46,10 +46,11 @@ use Getopt::Long;
 use Bio::EnsEMBL::Registry;
 use Bio::EnsEMBL::Utils::IO qw/work_with_file/;
 use Scalar::Util qw/looks_like_number/;
+use feature qw/say/;
 
 sub get_options {
   my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, $species, $group, $release);
-  my ($asm, $cmp) = ('GRCh37', 'NCBI36');
+  # my ($asm, $cmp) = ('GRCh37', 'NCBI36');
   $db_port = 3306;
   $species = 'human';
   $group = 'core';
@@ -62,8 +63,8 @@ sub get_options {
     "db_port|dbport|port=s"           => \$db_port,
     "species=s"                       => \$species,
     "version|release=i"               => \$release,
-    "asm=s"                           => \$asm,
-    "cmps=s"                          => \$cmp,
+    # "asm=s"                           => \$asm,
+    # "cmps=s"                          => \$cmp,
     "h!"                              => \$help,
     "help!"                           => \$help,
   );
@@ -74,17 +75,31 @@ sub get_options {
     -DB_VERSION => $release,
   );
   my $core_dba = Bio::EnsEMBL::Registry->get_DBAdaptor($species, $group);
-  return ($core_dba, $asm, $cmp);
+  return ($core_dba);
 }
 
 run();
 
 sub run { 
-  my ($core_dba, $asm_cs, $cmp_cs) = get_options();
-  my $asm_to_cmp_mappings = get_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-  write_mappings($asm_cs, $cmp_cs, $asm_to_cmp_mappings);
-  my $cmp_to_asm_mappings = get_reverse_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-  write_mappings($cmp_cs, $asm_cs, $cmp_to_asm_mappings);
+  my ($core_dba) = get_options();
+  my $liftovers = get_liftover_mappings($core_dba);
+  foreach my $mappings (@{$liftovers}) {
+    my ($asm_cs, $cmp_cs) = @{$mappings};
+    say "Writing out mappings from $cmp_cs to $asm_cs";
+    my $asm_to_cmp_mappings = get_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
+    write_mappings($asm_cs, $cmp_cs, $asm_to_cmp_mappings);
+    my $cmp_to_asm_mappings = get_reverse_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
+    write_mappings($cmp_cs, $asm_cs, $cmp_to_asm_mappings);
+    say "Finished writing";
+  }
+  return;
+}
+
+#Parse mapping keys like chromosome:GRCh37#chromosome:NCBI36 to ['GRCh37','NCBI36']
+sub get_liftover_mappings {
+  my ($core_dba) = @_;
+  my $mappings = $core_dba->get_MetaContainer()->list_value_by_key('liftover.mapping');
+  return [ map { $_ =~ /.+:(.+)#.+:(.+)/; [$1, $2] } @{$mappings} ];
 }
 
 sub write_mappings {
@@ -138,6 +153,7 @@ sub build_chain_mappings {
     if( ! defined $next || 
         $t_name ne $next->{asm_name} || 
         $ori != $next->{ori} ||
+        $asm_diff < 0 ||
         $cmp_diff < 0) {
       # Add the last gap on which is just the length of this alignment
       push(@chain_gaps, [$current->{length}]);
