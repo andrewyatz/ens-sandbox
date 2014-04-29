@@ -47,6 +47,8 @@ use Bio::EnsEMBL::Registry;
 use Bio::EnsEMBL::Utils::IO qw/work_with_file/;
 use Scalar::Util qw/looks_like_number/;
 use feature qw/say/;
+use File::Path qw/mkpath/;
+use File::Spec;
 
 sub get_options {
   my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, $species, $group, $release);
@@ -83,14 +85,17 @@ run();
 sub run { 
   my ($core_dba) = get_options();
   my $liftovers = get_liftover_mappings($core_dba);
+  my $prod_name = $core_dba->get_MetaContainer->get_production_name();
   foreach my $mappings (@{$liftovers}) {
     my ($asm_cs, $cmp_cs) = @{$mappings};
-    say "Writing out mappings from $cmp_cs to $asm_cs";
+    say "Working with $asm_cs to $cmp_cs";
+    say "\tFetching mappings";
     my $asm_to_cmp_mappings = get_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-    write_mappings($asm_cs, $cmp_cs, $asm_to_cmp_mappings);
+    write_mappings($asm_cs, $cmp_cs, $prod_name, $asm_to_cmp_mappings);
+    say "\tFetching reverse mappings";
     my $cmp_to_asm_mappings = get_reverse_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-    write_mappings($cmp_cs, $asm_cs, $cmp_to_asm_mappings);
-    say "Finished writing";
+    write_mappings($cmp_cs, $asm_cs, $prod_name, $cmp_to_asm_mappings);
+    say "\tFinished";
   }
   return;
 }
@@ -103,10 +108,15 @@ sub get_liftover_mappings {
 }
 
 sub write_mappings {
-  my ($source_cs, $target_cs, $mappings) = @_;
+  my ($source_cs, $target_cs, $prod_name, $mappings) = @_;
   my $file = "${source_cs}To${target_cs}.chain";
+  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name);
+  mkpath($dir);
+  my $path = File::Spec->catfile($dir, $file);
+  say "\tBuilding chain mappings";
   my $chains = build_chain_mappings($mappings);
-  work_with_file($file, 'w', sub {
+  say "\tWriting mappings to $path";
+  work_with_file($path, 'w', sub {
     my ($fh) = @_;
     print_chains($fh, $chains);
   });
