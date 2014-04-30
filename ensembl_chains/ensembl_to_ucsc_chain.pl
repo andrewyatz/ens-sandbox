@@ -50,9 +50,10 @@ use File::Path qw/mkpath/;
 use File::Spec;
 
 my $chain_id = 1;
+my %global_mapings;
 
 sub get_options {
-  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, $species, $group, $release, $external_db);
+  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, $species, $group, $release, @external_db);
   # my ($asm, $cmp) = ('GRCh37', 'NCBI36');
   $db_port = 3306;
   $species = 'human';
@@ -66,12 +67,12 @@ sub get_options {
     "db_port|dbport|port=s"           => \$db_port,
     "species=s"                       => \$species,
     "version|release=i"               => \$release,
-    "external_db=s"                   => \$external_db,
+    "external_db=s@"                   => \@external_db,
     "h!"                              => \$help,
     "help!"                           => \$help,
   );
 
-  die "No -external_db given" unless $external_db;
+  die "No -external_db given" unless @external_db;
 
   Bio::EnsEMBL::Registry->load_registry_from_db(
     -HOST => $db_host, -PORT => $db_port, 
@@ -79,27 +80,54 @@ sub get_options {
     -DB_VERSION => $release,
   );
   my $core_dba = Bio::EnsEMBL::Registry->get_DBAdaptor($species, $group);
-  return ($core_dba, $external_db);
+  return ($core_dba, @external_db);
 }
 
 run();
 
 sub run {
-  my ($core_dba, $external_db) = get_options();
+  my ($core_dba, @external_dbs) = get_options();
   my $prod_name = $core_dba->get_MetaContainer->get_production_name();
-  say "Working with ${prod_name} and ${external_db}";
 
-  if(! should_run($core_dba, $external_db)) {
-    say "\tNo synonyms found. Nothing to convert";
-    return;
-  }
-
-  say "\tFetching slices";
+  say "Working with ${prod_name}";
+  say "Fetching slices";
   my $slices = slices($core_dba);
+  say '';
 
-  write_mappings($prod_name, $slices, $external_db, 1);
-  write_mappings($prod_name, $slices, $external_db, 0);
-  say "\tDone";
+  foreach my $external_db (@external_dbs) {
+    say "Processing ${external_db}";
+
+    if(! should_run($core_dba, $external_db)) {
+      say "\tNo synonyms found. Nothing to convert";
+      return;
+    }
+
+    write_mappings($prod_name, $slices, $external_db, 1);
+    write_mappings($prod_name, $slices, $external_db, 0);
+    say "\tDone";
+    say q{};
+  }
+  write_tab_lookup($core_dba, $prod_name, @external_dbs);
+}
+
+sub write_tab_lookup {
+  my ($core_dba, $prod_name, @external_dbs) = @_;
+
+  my $assembly = $core_dba->get_GenomeContainer->get_version();
+  my $file = "${assembly}_region_lookup.tsv";
+  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name);
+  mkpath($dir);
+  my $path = File::Spec->catfile($dir, $file);
+
+  say "Writing tab lookup to $path";
+  work_with_file($path, 'w', sub {
+    my ($fh) = @_;
+    say $fh '#'.join("\t", ('Ensembl', @external_dbs));
+    foreach my $slice (sort keys %global_mapings) {
+      say $fh join("\t", $slice, map { defined($_) ? $_ : '.' } map {$global_mapings{$slice}{$_}} @external_dbs);
+    }
+  });
+  return;
 }
 
 sub should_run {
@@ -141,7 +169,7 @@ sub write_mappings {
 sub slices {
   my ($core_dba) = @_;
   my %hash; 
-  my $slices = $core_dba->get_SliceAdaptor->fetch_all('toplevel');
+  my $slices = $core_dba->get_SliceAdaptor->fetch_all('toplevel', undef, 'nonref');
   while(my $slice = shift @{$slices}) {
     $hash{$slice->seq_region_name()} = $slice;
   }
@@ -162,10 +190,11 @@ sub build_chains {
 # trg is the source data & q is the target i.e. converting from UCSC to Ensembl means trg == chr1 & q == 1
 sub build_chain {
   my ($slice, $external_db, $to_ensembl) = @_;
-  my ($ucsc) = @{$slice->get_all_synonyms($external_db)};
+  my ($synonym) = @{$slice->get_all_synonyms($external_db)};
   my $seq_region_name = $slice->seq_region_name();
-  return unless $ucsc;
-  my ($t_name, $q_name) = ($to_ensembl) ? ($ucsc->name(), $seq_region_name) : ($seq_region_name, $ucsc->name());
+  return unless $synonym;
+  $global_mapings{$seq_region_name}{$external_db} = $synonym->name();
+  my ($t_name, $q_name) = ($to_ensembl) ? ($synonym->name(), $seq_region_name) : ($seq_region_name, $synonym->name());
   my $size = $slice->seq_region_length();
   return {
     # header => ['chain', $chain_score, $t_name, $t_size, $t_strand, $t_start, $t_end, $q_name, $q_size, $q_strand, $q_start, $q_end, $chain_id],
