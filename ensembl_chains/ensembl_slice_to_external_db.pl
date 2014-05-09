@@ -74,12 +74,24 @@ sub get_options {
 
   die "No -external_db given" unless @external_db;
 
-  Bio::EnsEMBL::Registry->load_registry_from_db(
-    -HOST => $db_host, -PORT => $db_port, 
-    -USER => $db_user, -PASS => $db_pass,
-    -DB_VERSION => $release,
-  );
-  my $core_dba = Bio::EnsEMBL::Registry->get_DBAdaptor($species, $group);
+  my $core_dba;
+  if($db_name) {
+    $core_dba = Bio::EnsEMBL::DBSQL::DBAdaptor->new(
+      -HOST => $db_host,
+      -PORT => $db_port,
+      -USER => $db_user,
+      -DBNAME => $db_name,
+      -SPECIES => $species
+    );
+  }
+  else {
+    Bio::EnsEMBL::Registry->load_registry_from_db(
+      -HOST => $db_host, -PORT => $db_port, 
+      -USER => $db_user, -PASS => $db_pass,
+      -DB_VERSION => $release,
+    );
+    $core_dba = Bio::EnsEMBL::Registry->get_DBAdaptor($species, $group);
+  }
   return ($core_dba, @external_db);
 }
 
