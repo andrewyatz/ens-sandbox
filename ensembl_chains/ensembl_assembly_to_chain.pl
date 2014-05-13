@@ -109,8 +109,8 @@ sub get_liftover_mappings {
 
 sub write_mappings {
   my ($source_cs, $target_cs, $prod_name, $mappings) = @_;
-  my $file = "${source_cs}To${target_cs}.chain";
-  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name);
+  my $file = "${target_cs}.chain";
+  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name, $source_cs);
   mkpath($dir);
   my $path = File::Spec->catfile($dir, $file);
   say "\tBuilding chain mappings";
