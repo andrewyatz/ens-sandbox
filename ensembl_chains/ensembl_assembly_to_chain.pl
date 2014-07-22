@@ -44,18 +44,21 @@ use strict;
 use warnings;
 use Getopt::Long;
 use Bio::EnsEMBL::Registry;
-use Bio::EnsEMBL::Utils::IO qw/work_with_file/;
+use Bio::EnsEMBL::Utils::IO qw/work_with_file gz_work_with_file/;
 use Scalar::Util qw/looks_like_number/;
 use feature qw/say/;
 use File::Path qw/mkpath/;
 use File::Spec;
 
+my $COMPRESS = 0;
+
 sub get_options {
-  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, $species, $group, $release);
+  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, @species, $group, $release, $dir, $compress);
   # my ($asm, $cmp) = ('GRCh37', 'NCBI36');
   $db_port = 3306;
-  $species = 'human';
   $group = 'core';
+  $compress=0;
+  $dir = File::Spec->curdir();
 
   GetOptions(
     "db_name|dbname|database=s"       => \$db_name,
@@ -63,12 +66,11 @@ sub get_options {
     "db_user|dbuser|user|username=s"  => \$db_user,
     "db_pass|dbpass|pass|password=s"  => \$db_pass,
     "db_port|dbport|port=s"           => \$db_port,
-    "species=s"                       => \$species,
+    "species=s@"                      => \@species,
     "version|release=i"               => \$release,
-    # "asm=s"                           => \$asm,
-    # "cmps=s"                          => \$cmp,
-    "h!"                              => \$help,
-    "help!"                           => \$help,
+    "directory|dir=s"                 => \$dir,
+    "compress|gzip|gz!"               => \$compress,
+    "help|h!"                         => \$help,
   );
 
   Bio::EnsEMBL::Registry->load_registry_from_db(
@@ -76,26 +78,60 @@ sub get_options {
     -USER => $db_user, -PASS => $db_pass,
     -DB_VERSION => $release,
   );
-  my $core_dba = Bio::EnsEMBL::Registry->get_DBAdaptor($species, $group);
-  return ($core_dba);
+  
+  $COMPRESS = $compress;
+  my @dbas;
+  my %final_dbas;
+    
+  if(@species) {
+    say "Working against a restricted species list";
+    foreach my $s (@species) {
+      my $dba = Bio::EnsEMBL::Registry->get_DBAdaptor($s, $group);
+      die "Cannot find a DBAdaptor for the species ${s}" unless $dba;
+      push(@dbas, $dba);
+    }
+  }
+  else {
+    say "Dumping chain file for all available species";
+    @dbas = @{Bio::EnsEMBL::Registry->get_all_DBAdaptors(-GROUP => 'core')};
+  }
+  
+  foreach my $dba (@dbas) {
+    my $entries = get_liftover_mappings($dba);
+    $final_dbas{$dba->get_MetaContainer()->get_production_name()} = $dba if @{$entries};
+    $dba->dbc->disconnect_if_idle();
+  }
+  
+  # Return including sorting the species by name as it's just nicer that way
+  return ($dir, map { $final_dbas{$_} } sort keys %final_dbas);
 }
 
 run();
 
-sub run { 
-  my ($core_dba) = get_options();
-  my $liftovers = get_liftover_mappings($core_dba);
+sub run {
+  my ($dir, @dbas) = get_options();
+  foreach my $dba (@dbas) {
+    run_on_dba($dir, $dba);
+    $dba->dbc->disconnect_if_idle;
+  }
+  return;
+}
+
+sub run_on_dba { 
+  my ($dir, $core_dba) = @_;
   my $prod_name = $core_dba->get_MetaContainer->get_production_name();
+  say "Processing ${prod_name}";
+  my $liftovers = get_liftover_mappings($core_dba);
   foreach my $mappings (@{$liftovers}) {
     my ($asm_cs, $cmp_cs) = @{$mappings};
-    say "Working with $asm_cs to $cmp_cs";
-    say "\tFetching mappings";
+    say "\tWorking with $asm_cs to $cmp_cs";
+    say "\t\tFetching mappings";
     my $asm_to_cmp_mappings = get_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-    write_mappings($asm_cs, $cmp_cs, $prod_name, $asm_to_cmp_mappings);
-    say "\tFetching reverse mappings";
+    write_mappings($dir, $asm_cs, $cmp_cs, $prod_name, $asm_to_cmp_mappings);
+    say "\t\tFetching reverse mappings";
     my $cmp_to_asm_mappings = get_reverse_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-    write_mappings($cmp_cs, $asm_cs, $prod_name, $cmp_to_asm_mappings);
-    say "\tFinished";
+    write_mappings($dir, $cmp_cs, $asm_cs, $prod_name, $cmp_to_asm_mappings);
+    say "\t\tFinished";
   }
   return;
 }
@@ -108,18 +144,28 @@ sub get_liftover_mappings {
 }
 
 sub write_mappings {
-  my ($source_cs, $target_cs, $prod_name, $mappings) = @_;
+  my ($dir, $source_cs, $target_cs, $prod_name, $mappings) = @_;
   my $file = "${target_cs}.chain";
-  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name, $source_cs);
-  mkpath($dir);
-  my $path = File::Spec->catfile($dir, $file);
-  say "\tBuilding chain mappings";
+  $file .= '.gz' if $COMPRESS;
+  my $target_dir = File::Spec->catdir($dir, $prod_name, $source_cs);
+  mkpath($target_dir);
+  my $path = File::Spec->catfile($target_dir, $file);
+  say "\t\tBuilding chain mappings";
   my $chains = build_chain_mappings($mappings);
-  say "\tWriting mappings to $path";
-  work_with_file($path, 'w', sub {
+  say "\t\tWriting mappings to $path";
+  
+  my $writer = sub {
     my ($fh) = @_;
     print_chains($fh, $chains);
-  });
+  };
+  
+  if($COMPRESS) {
+    gz_work_with_file($path, 'w', $writer);
+  }
+  else {
+    work_with_file($path, 'w', $writer);
+  }
+  
   return;
 }
 

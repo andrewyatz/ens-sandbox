@@ -53,11 +53,12 @@ my $chain_id = 1;
 my %global_mapings;
 
 sub get_options {
-  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, $species, $group, $release, @external_db);
+  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, @species, $group, $release, $dir, $compress, @external_db);
   # my ($asm, $cmp) = ('GRCh37', 'NCBI36');
   $db_port = 3306;
-  $species = 'human';
+  # $species = 'human';
   $group = 'core';
+  $dir = File::Spec->curdir();
 
   GetOptions(
     "db_name|dbname|database=s"       => \$db_name,
@@ -65,74 +66,93 @@ sub get_options {
     "db_user|dbuser|user|username=s"  => \$db_user,
     "db_pass|dbpass|pass|password=s"  => \$db_pass,
     "db_port|dbport|port=s"           => \$db_port,
-    "species=s"                       => \$species,
+    "species=s@"                      => \@species,
+    "dir=s"                           => \$dir,
+    "compress!"                       => \$compress,
     "version|release=i"               => \$release,
-    "external_db=s@"                   => \@external_db,
+    "external_db=s@"                  => \@external_db,
     "h!"                              => \$help,
     "help!"                           => \$help,
   );
 
   die "No -external_db given" unless @external_db;
+  
+  Bio::EnsEMBL::Registry->load_registry_from_db(
+    -HOST => $db_host, -PORT => $db_port, 
+    -USER => $db_user, -PASS => $db_pass,
+    -DB_VERSION => $release
+  );
 
-  my $core_dba;
-  if($db_name) {
-    $core_dba = Bio::EnsEMBL::DBSQL::DBAdaptor->new(
-      -HOST => $db_host,
-      -PORT => $db_port,
-      -USER => $db_user,
-      -DBNAME => $db_name,
-      -SPECIES => $species
-    );
+  my @dbas;
+    
+  if(@species) {
+    say "Working against a restricted species list";
+    foreach my $s (@species) {
+      my $dba = Bio::EnsEMBL::Registry->get_DBAdaptor($s, $group);
+      die "Cannot find a DBAdaptor for the species ${s}" unless $dba;
+      push(@dbas, $dba);
+    }
   }
   else {
-    Bio::EnsEMBL::Registry->load_registry_from_db(
-      -HOST => $db_host, -PORT => $db_port, 
-      -USER => $db_user, -PASS => $db_pass,
-      -DB_VERSION => $release,
-    );
-    $core_dba = Bio::EnsEMBL::Registry->get_DBAdaptor($species, $group);
+    say "Dumping chain file for all available species";
+    @dbas = sort {$a->dbc->dbname cmp $b->dbc->dbname} @{Bio::EnsEMBL::Registry->get_all_DBAdaptors(-GROUP => 'core')};
   }
-  return ($core_dba, @external_db);
+
+  return {
+    dbas => \@dbas,
+    external_dbs => \@external_db,
+    dir => $dir,
+    compress => $compress
+  };
 }
 
 run();
 
 sub run {
-  my ($core_dba, @external_dbs) = get_options();
+  my $opts = get_options();
+  foreach my $dba (@{$opts->{dbas}}) {
+    run_for_dba($dba, $opts);
+    $dba->dbc->disconnect_if_idle;
+  }
+  return;
+}
+
+sub run_for_dba {
+  my ($core_dba, $opts) = @_;
   my $prod_name = $core_dba->get_MetaContainer->get_production_name();
 
   say "Working with ${prod_name}";
-  say "Fetching slices";
+  say "\tFetching slices";
   my $slices = slices($core_dba);
-  say '';
-
-  foreach my $external_db (@external_dbs) {
-    say "Processing ${external_db}";
+  my $data;
+  foreach my $external_db (@{$opts->{external_dbs}}) {
+    say "\tProcessing ${external_db}";
 
     if(! should_run($core_dba, $external_db)) {
       say "\tNo synonyms found. Nothing to convert";
-      return;
+      next;
     }
-
-    write_mappings($prod_name, $slices, $external_db, 1);
-    write_mappings($prod_name, $slices, $external_db, 0);
+    $data = 1;
+    write_mappings($opts, $core_dba, $slices, $external_db, 1);
+    write_mappings($opts, $core_dba, $slices, $external_db, 0);
     say "\tDone";
     say q{};
   }
-  write_tab_lookup($core_dba, $prod_name, @external_dbs);
+  write_tab_lookup($opts, $core_dba, $prod_name) if $data;
 }
 
 sub write_tab_lookup {
-  my ($core_dba, $prod_name, @external_dbs) = @_;
+  my ($opts, $core_dba, $prod_name) = @_;
 
+  my @external_dbs = @{$opts->{external_dbs}};
   my $assembly = $core_dba->get_GenomeContainer->get_version();
   my $file = "${assembly}_region_lookup.tsv";
-  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name);
+  my $dir = File::Spec->catdir($opts->{dir}, $prod_name);
   mkpath($dir);
   my $path = File::Spec->catfile($dir, $file);
 
-  say "Writing tab lookup to $path";
-  work_with_file($path, 'w', sub {
+  say "\tWriting tab lookup to $path";
+  write_to_file($path, $opts, sub {
     my ($fh) = @_;
     say $fh '#'.join("\t", ('Ensembl', @external_dbs));
     foreach my $slice (sort keys %global_mapings) {
@@ -158,20 +178,22 @@ SQL
 }
 
 sub write_mappings {
-  my ($prod_name, $slices, $external_db, $to_ensembl) = @_;
+  my ($opts, $core_dba, $slices, $external_db, $to_ensembl) = @_;
   
+  my $assembly = $core_dba->get_GenomeContainer->get_version();
+  my $prod_name = $core_dba->get_MetaContainer->get_production_name();
   my $direction = ($to_ensembl) ? "from ${external_db} to Ensembl" : "from Ensembl to ${external_db}";
   say "\tBuilding chain mappings $direction";
   my $chains = build_chains($slices, $external_db, $to_ensembl);
 
   # Setup path
   my $file = ($to_ensembl) ? "${external_db}ToEnsembl.chain" : "EnsemblTo${external_db}.chain";
-  my $dir = File::Spec->catdir(File::Spec->curdir(), $prod_name);
+  my $dir = File::Spec->catdir($opts->{dir}, $prod_name, $assembly);
   mkpath($dir);
   my $path = File::Spec->catfile($dir, $file);
 
   say "\tWriting mappings to $path";
-  work_with_file($path, 'w', sub {
+  write_to_file($path, $opts, sub {
     my ($fh) = @_;
     print_chains($fh, $chains);
   });
@@ -229,4 +251,16 @@ sub print_chains {
     }
     print $fh "\n";
   }
+}
+
+sub write_to_file {
+  my ($path, $opts, $writer) = @_;
+  if($$opts->{compress}) {
+    $path .= '.gz';
+    gz_work_with_file($path, 'w', $writer);
+  }
+  else {
+    work_with_file($path, 'w', $writer);
+  }
+  return;
 }
