@@ -145,9 +145,9 @@ sub get_liftover_mappings {
 
 sub write_mappings {
   my ($dir, $source_cs, $target_cs, $prod_name, $mappings) = @_;
-  my $file = "${target_cs}.chain";
+  my $file = "${source_cs}_to_${target_cs}.chain";
   $file .= '.gz' if $COMPRESS;
-  my $target_dir = File::Spec->catdir($dir, $prod_name, $source_cs);
+  my $target_dir = File::Spec->catdir($dir, $prod_name);
   mkpath($target_dir);
   my $path = File::Spec->catfile($target_dir, $file);
   say "\t\tBuilding chain mappings";
