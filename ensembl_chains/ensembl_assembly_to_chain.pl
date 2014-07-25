@@ -51,13 +51,16 @@ use File::Path qw/mkpath/;
 use File::Spec;
 
 my $COMPRESS = 0;
+my $UCSC = 0;
+my %ucsc_name_cache;
 
 sub get_options {
-  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, @species, $group, $release, $dir, $compress);
+  my ($db_name, $db_host, $db_user, $db_pass, $db_port, $help, @species, $group, $release, $dir, $compress, $ucsc);
   # my ($asm, $cmp) = ('GRCh37', 'NCBI36');
   $db_port = 3306;
   $group = 'core';
   $compress=0;
+  $ucsc=0;
   $dir = File::Spec->curdir();
 
   GetOptions(
@@ -70,6 +73,7 @@ sub get_options {
     "version|release=i"               => \$release,
     "directory|dir=s"                 => \$dir,
     "compress|gzip|gz!"               => \$compress,
+    "ucsc!"                           => \$ucsc,
     "help|h!"                         => \$help,
   );
 
@@ -80,6 +84,7 @@ sub get_options {
   );
   
   $COMPRESS = $compress;
+  $UCSC = $ucsc;
   my @dbas;
   my %final_dbas;
     
@@ -127,10 +132,10 @@ sub run_on_dba {
     say "\tWorking with $asm_cs to $cmp_cs";
     say "\t\tFetching mappings";
     my $asm_to_cmp_mappings = get_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-    write_mappings($dir, $asm_cs, $cmp_cs, $prod_name, $asm_to_cmp_mappings);
+    write_mappings($dir, $asm_cs, $cmp_cs, $prod_name, $asm_to_cmp_mappings, $core_dba);
     say "\t\tFetching reverse mappings";
     my $cmp_to_asm_mappings = get_reverse_assembly_mappings($core_dba, $asm_cs, $cmp_cs);
-    write_mappings($dir, $cmp_cs, $asm_cs, $prod_name, $cmp_to_asm_mappings);
+    write_mappings($dir, $cmp_cs, $asm_cs, $prod_name, $cmp_to_asm_mappings, $core_dba);
     say "\t\tFinished";
   }
   return;
@@ -144,7 +149,7 @@ sub get_liftover_mappings {
 }
 
 sub write_mappings {
-  my ($dir, $source_cs, $target_cs, $prod_name, $mappings) = @_;
+  my ($dir, $source_cs, $target_cs, $prod_name, $mappings, $core_dba) = @_;
   my $file = "${source_cs}_to_${target_cs}.chain";
   $file .= '.gz' if $COMPRESS;
   my $target_dir = File::Spec->catdir($dir, $prod_name);
@@ -152,11 +157,17 @@ sub write_mappings {
   my $path = File::Spec->catfile($target_dir, $file);
   say "\t\tBuilding chain mappings";
   my $chains = build_chain_mappings($mappings);
+  my $ucsc_chains = [];
+  if($UCSC) {
+    say "\t\tBuilding UCSC mappings";
+    $ucsc_chains = create_ucsc_chains($core_dba, $prod_name, $chains);
+  }
   say "\t\tWriting mappings to $path";
   
   my $writer = sub {
     my ($fh) = @_;
     print_chains($fh, $chains);
+    print_chains($fh, $ucsc_chains) if @{$ucsc_chains};
   };
   
   if($COMPRESS) {
@@ -308,4 +319,46 @@ sub print_chains {
     }
     print $fh "\n";
   }
+}
+
+sub create_ucsc_chains {
+  my ($dba, $prod_name, $chains) = @_;
+  my @new_chains;
+  foreach my $chain_def (@{$chains}) {
+    my $ensembl_name = $chain_def->{header}->[2];
+    my $target_name = ensembl_to_ucsc_name($dba, $prod_name, $ensembl_name);
+    next if $ensembl_name eq $target_name;
+    my %new_chain_def = %{$chain_def};
+    # Substitute tName which in a GRCh37 -> GRCh38 mapping tName is GRCh37's code
+    $new_chain_def{header}[2] = $target_name;
+    push(@new_chains, \%new_chain_def);
+  }
+  return \@new_chains;
+}
+
+sub ensembl_to_ucsc_name {
+  my ($dba, $prod_name, $ensembl_name) = @_;
+
+  return $ucsc_name_cache{$prod_name}{$ensembl_name} if exists $ucsc_name_cache{$prod_name}{$ensembl_name};
+
+  # Default is Ensembl name
+  my $ucsc_name = $ensembl_name;
+  my $slice = $dba->get_DBAdaptor('slice', 'core')->fetch_by_region(undef, $ensembl_name);
+  my $synonyms = $slice->get_all_synonyms('UCSC');
+  if(@{$synonyms}) {
+    $ucsc_name = $synonyms->[0]->name();
+  }
+  else {
+    if($slice->is_chromosome()) {
+      #MT is a special case; it's chrM
+      if($ensembl_name eq 'MT' ) {
+        $ucsc_name = 'chrM';
+      }
+      # If it was a ref region add chr onto it (only check if we have an adaptor)
+      elsif($slice->is_reference()) {
+        $ucsc_name = 'chr'.$ensembl_name;
+      }
+    }
+  }
+  return $ucsc_name_cache{$prod_name}{$ensembl_name} = $ucsc_name;  
 }
