@@ -343,7 +343,7 @@ sub ensembl_to_ucsc_name {
 
   # Default is Ensembl name
   my $ucsc_name = $ensembl_name;
-  my $slice = $dba->get_DBAdaptor('slice', 'core')->fetch_by_region(undef, $ensembl_name);
+  my $slice = $dba->get_SliceAdaptor()->fetch_by_region(undef, $ensembl_name);
   my $synonyms = $slice->get_all_synonyms('UCSC');
   if(@{$synonyms}) {
     $ucsc_name = $synonyms->[0]->name();
