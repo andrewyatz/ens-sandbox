@@ -49,6 +49,7 @@ use Scalar::Util qw/looks_like_number/;
 use feature qw/say/;
 use File::Path qw/mkpath/;
 use File::Spec;
+use JSON;
 
 my $COMPRESS = 0;
 my $UCSC = 0;
@@ -328,10 +329,10 @@ sub create_ucsc_chains {
     my $ensembl_name = $chain_def->{header}->[2];
     my $target_name = ensembl_to_ucsc_name($dba, $prod_name, $ensembl_name);
     next if $ensembl_name eq $target_name;
-    my %new_chain_def = %{$chain_def};
+    my $new_chain_def = decode_json(encode_json($chain_def)); # quick clone
     # Substitute tName which in a GRCh37 -> GRCh38 mapping tName is GRCh37's code
-    $new_chain_def{header}[2] = $target_name;
-    push(@new_chains, \%new_chain_def);
+    $new_chain_def->{header}[2] = $target_name;
+    push(@new_chains, $new_chain_def);
   }
   return \@new_chains;
 }
