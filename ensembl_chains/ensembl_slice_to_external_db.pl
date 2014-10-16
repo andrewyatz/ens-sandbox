@@ -44,7 +44,7 @@ use strict;
 use warnings;
 use Getopt::Long;
 use Bio::EnsEMBL::Registry;
-use Bio::EnsEMBL::Utils::IO qw/work_with_file/;
+use Bio::EnsEMBL::Utils::IO qw/work_with_file gz_work_with_file/;
 use feature qw/say/;
 use File::Path qw/mkpath/;
 use File::Spec;
@@ -155,8 +155,10 @@ sub write_tab_lookup {
   write_to_file($path, $opts, sub {
     my ($fh) = @_;
     say $fh '#'.join("\t", ('Ensembl', @external_dbs));
-    foreach my $slice (sort keys %global_mapings) {
-      say $fh join("\t", $slice, map { defined($_) ? $_ : '.' } map {$global_mapings{$slice}{$_}} @external_dbs);
+    foreach my $slice (@{slices($core_dba)}) {
+      my $seq_region_name = $slice->seq_region_name();
+      next unless exists $global_mapings{$prod_name}{$seq_region_name};
+      say $fh join("\t", $seq_region_name, map { defined($_) ? $_ : '.' } map {$global_mapings{$prod_name}{$seq_region_name}{$_}} @external_dbs);
     }
   });
   return;
@@ -184,7 +186,7 @@ sub write_mappings {
   my $prod_name = $core_dba->get_MetaContainer->get_production_name();
   my $direction = ($to_ensembl) ? "from ${external_db} to Ensembl" : "from Ensembl to ${external_db}";
   say "\tBuilding chain mappings $direction";
-  my $chains = build_chains($slices, $external_db, $to_ensembl);
+  my $chains = build_chains($slices, $external_db, $to_ensembl, $prod_name);
 
   # Setup path
   my $file = ($to_ensembl) ? "${external_db}ToEnsembl.chain" : "EnsemblTo${external_db}.chain";
@@ -207,14 +209,19 @@ sub slices {
   while(my $slice = shift @{$slices}) {
     $hash{$slice->seq_region_name()} = $slice;
   }
-  return [values %hash];
+  return [
+    map { $_->[0] }
+    sort { $a->[1] <=> $b->[1] || $a->[2] cmp $b->[2] } 
+    map { my $rank = $_->karyotype_rank(); $rank = 1e8 if $rank == 0; [$_, $rank, $_->seq_region_name()] } 
+    values %hash
+  ];
 }
 
 sub build_chains {
-  my ($slices, $external_db, $to_ensembl) = @_;
+  my ($slices, $external_db, $to_ensembl, $prod_name) = @_;
   my @chains;
   foreach my $slice (@{$slices}) {
-    my $chain = build_chain($slice, $external_db, $to_ensembl);
+    my $chain = build_chain($slice, $external_db, $to_ensembl, $prod_name);
     next unless defined $chain;
     push(@chains, $chain);
   }
@@ -223,11 +230,12 @@ sub build_chains {
 
 # trg is the source data & q is the target i.e. converting from UCSC to Ensembl means trg == chr1 & q == 1
 sub build_chain {
-  my ($slice, $external_db, $to_ensembl) = @_;
+  my ($slice, $external_db, $to_ensembl, $prod_name) = @_;
   my ($synonym) = @{$slice->get_all_synonyms($external_db)};
   my $seq_region_name = $slice->seq_region_name();
   return unless $synonym;
-  $global_mapings{$seq_region_name}{$external_db} = $synonym->name();
+  #Write into a global hash so we know what the synonyms were for the TSV file
+  $global_mapings{$prod_name}{$seq_region_name}{$external_db} = $synonym->name();
   my ($t_name, $q_name) = ($to_ensembl) ? ($synonym->name(), $seq_region_name) : ($seq_region_name, $synonym->name());
   my $size = $slice->seq_region_length();
   return {
@@ -255,7 +263,7 @@ sub print_chains {
 
 sub write_to_file {
   my ($path, $opts, $writer) = @_;
-  if($$opts->{compress}) {
+  if($opts->{compress}) {
     $path .= '.gz';
     gz_work_with_file($path, 'w', $writer);
   }
