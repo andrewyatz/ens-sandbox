@@ -44,6 +44,7 @@ use strict;
 use warnings;
 use Getopt::Long;
 use Bio::EnsEMBL::Registry;
+use Bio::EnsEMBL::DBSQL::DBAdaptor;
 use Bio::EnsEMBL::Utils::IO qw/work_with_file gz_work_with_file/;
 use Scalar::Util qw/looks_like_number/;
 use feature qw/say/;
@@ -78,11 +79,27 @@ sub get_options {
     "help|h!"                         => \$help,
   );
 
-  Bio::EnsEMBL::Registry->load_registry_from_db(
+  my %args = (
     -HOST => $db_host, -PORT => $db_port, 
-    -USER => $db_user, -PASS => $db_pass,
-    -DB_VERSION => $release,
+    -USER => $db_user
   );
+  $args{-PASS} = $db_pass if $db_pass;
+
+  # must be a DB we need
+  if($db_name) {
+    Bio::EnsEMBL::DBSQL::DBAdaptor->new(
+      %args,
+      -DBNAME => $db_name,
+      -SPECIES => $db_name,
+      -GROUP => 'core'
+    );
+  }
+  else {
+    Bio::EnsEMBL::Registry->load_registry_from_db(
+      %args,
+      -DB_VERSION => $release,
+    );
+  }
   
   $COMPRESS = $compress;
   $UCSC = $ucsc;
@@ -104,7 +121,9 @@ sub get_options {
   
   foreach my $dba (@dbas) {
     my $entries = get_liftover_mappings($dba);
-    $final_dbas{$dba->get_MetaContainer()->get_production_name()} = $dba if @{$entries};
+    my $prod_name = $dba->get_MetaContainer()->get_production_name();
+    $prod_name //= $dba->species();
+    $final_dbas{$prod_name} = $dba if @{$entries};
     $dba->dbc->disconnect_if_idle();
   }
   
@@ -126,6 +145,7 @@ sub run {
 sub run_on_dba { 
   my ($dir, $core_dba) = @_;
   my $prod_name = $core_dba->get_MetaContainer->get_production_name();
+  $prod_name //= $core_dba->species();
   say "Processing ${prod_name}";
   my $liftovers = get_liftover_mappings($core_dba);
   foreach my $mappings (@{$liftovers}) {
