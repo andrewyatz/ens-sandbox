@@ -218,7 +218,6 @@ sub process {
   while (my $dba = shift @{$dbas}) {
     $self->_process_dba($dba);
     $dba->dbc->disconnect_if_idle();
-    last;
   }
   return;
 }
