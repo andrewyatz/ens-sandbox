@@ -133,7 +133,8 @@ sub run {
 sub args {
   my ($self) = @_;
   my $opts = {
-    port => 3306
+    port => 3306,
+    resume => 0,
   };
   GetOptions(
     $opts, qw/
@@ -146,6 +147,7 @@ sub args {
       species=s
       gzip
       pretty
+      resume
       verbose
       help
       man
@@ -178,17 +180,15 @@ sub check {
     }
   }
   
-  if(-d $o->{dir}) {
+  if(-d $o->{dir} && ! $o->{resume}) {
     pod2usage(
       -message => "-dir exists. Choosing not to continue because I could overwrite existing data",
       -verbose => 1,
       -exitval => 1
     );
   }
-  else {
-    make_path($o->{dir});
-    $o->{dir} = rel2abs($o->{dir});
-  }
+  make_path($o->{dir}) if ! -d $o->{dir};
+  $o->{dir} = rel2abs($o->{dir});
   
   return;
 }
@@ -228,7 +228,13 @@ sub _process_dba {
   my ($ext, $mode) = ($o->{gzip}) ? ('json.gz', '>:gzip') : ('json', '>');
   my $species = $dba->get_MetaContainer()->get_production_name();
   my $release = $dba->get_MetaContainer()->get_schema_version();
-  printf("Writing genes for %s\n", $species);
+  
+  my $species_dir = catdir($o->{dir}, $release, $species);
+  if(-d $species_dir && $o->{resume}) {
+    printf("Skipping genes for %s. Dir already exists\n", $species);
+    return;
+  }
+  
   my $json = JSON::XS->new()->convert_blessed();
   $json->pretty(1) if $o->{pretty};
   my $genes = $dba->get_GeneAdaptor()->fetch_all();
@@ -236,7 +242,7 @@ sub _process_dba {
     $gene->load(1);
     my $stable_id = $gene->stable_id();
     my ($extra_dir) = $stable_id =~ /(\w{2})$/;
-    my $target_dir = catdir($o->{dir}, $release, $species, $extra_dir);
+    my $target_dir = catdir($species_dir, $extra_dir);
     make_path($target_dir);
     my $path = catfile($target_dir, sprintf("%s.%s", $gene->stable_id(), $ext));
     work_with_file($path, $mode, sub {
