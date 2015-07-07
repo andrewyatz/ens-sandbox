@@ -242,6 +242,7 @@ sub _process_dba {
     $gene->load(1);
     my $stable_id = $gene->stable_id();
     my ($extra_dir) = $stable_id =~ /(\w{2})$/;
+    $extra_dir //= 'unclassified';
     my $target_dir = catdir($species_dir, $extra_dir);
     make_path($target_dir);
     my $path = catfile($target_dir, sprintf("%s.%s", $gene->stable_id(), $ext));
