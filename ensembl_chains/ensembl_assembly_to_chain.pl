@@ -235,11 +235,15 @@ sub build_chain_mappings {
       $q_start = ($ori == 1) ? $current->{cmp_start} : $current->{cmp_end};
     }
 
-    # Can mean we have run out of mappings, we are into a new chromsome or strand has swapped.
+    # Block that decides we need to start a new chain definition
+    #
+    # Can mean we have run out of mappings, we are into a new chromsome (both source and target) 
+    # or strand has swapped.
     # Final reason is we've had an out-of-order meaning a negative gap was produced 
     # (we're going backwards). In any situation this means the chain is finished
     if( ! defined $next || 
-        $t_name ne $next->{asm_name} || 
+        $t_name ne $next->{asm_name} ||
+        $q_name ne $next->{cmp_name} || # we can switch target chromosomes. e.g. cross chromsome mappings in mouse NCBI37->GRCm38
         $ori != $next->{ori} ||
         $asm_diff < 0 ||
         $cmp_diff < 0) {
