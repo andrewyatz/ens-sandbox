@@ -229,8 +229,9 @@ sub _process_dba {
   my $species = $dba->get_MetaContainer()->get_production_name();
   my $release = $dba->get_MetaContainer()->get_schema_version();
   my $division = $dba->get_MetaContainer()->get_division();
+  $division //= 'Ensembl';
   
-  my $species_dir = catdir($o->{dir}, $release, $species, $division);
+  my $species_dir = catdir($o->{dir}, $release, $division, $species);
   if(-d $species_dir && $o->{resume}) {
     printf("Skipping genes for %s. Dir already exists\n", $species);
     return;
