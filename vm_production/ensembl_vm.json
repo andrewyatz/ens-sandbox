@@ -1,0 +1,55 @@
+ {
+  "builders": [{
+    "type": "virtualbox-iso",
+    "virtualbox_version_file": ".vbox_version",
+    "headless": false,
+
+    "guest_os_type": "Ubuntu_64",
+    "disk_size": 40960,
+
+    "iso_url": "http://releases.ubuntu.com/12.04/ubuntu-12.04.5-server-amd64.iso",
+    "iso_checksum": "7540ace2d6cdee264432f5ed987236d32edef798",
+    "iso_checksum_type": "sha1",
+
+    "boot_command": [
+      "<esc><esc><enter><wait>",
+      "/install/vmlinuz noapic preseed/url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/ubuntu-12.04-amd64/preseed.cfg ",
+      "debian-installer=en_GB auto locale=en_GB kbd-chooser/method=uk ",
+      "hostname={{ .Name }} ",
+      "fb=false debconf/frontend=noninteractive ",
+      "keyboard-configuration/modelcode=SKIP keyboard-configuration/layout=GB keyboard-configuration/variant=GB console-setup/ask_detect=false ",
+      "initrd=/install/initrd.gz -- <enter>"
+    ],
+
+    "boot_wait": "12s",
+
+    "http_directory": "http",
+    "guest_additions_path": "VBoxGuestAdditions_{{.Version}}.iso",
+
+    "ssh_username": "user",
+    "ssh_password": "pass",
+    "ssh_port": 22,
+    "ssh_wait_timeout": "10000s",
+
+    "vboxmanage": [
+      ["modifyvm", "{{.Name}}", "--memory", "1024"],
+      ["modifyvm", "{{.Name}}", "--cpus", "1"],
+      ["modifyvm", "{{.Name}}", "--vram", "32"],
+      ["modifyvm", "{{.Name}}", "--accelerate3d", "on"]
+    ],
+
+    "format" : "ova",
+
+    "shutdown_command": "echo 'ensembl'|sudo -S /sbin/halt -h -p"
+  }],
+
+   "provisioners" : [{
+    "type": "shell",
+    "execute_command": "echo 'ensembl' | sudo -S sh '{{ .Path }}'",
+    "inline": [
+      "rm /var/lib/apt/lists/*",
+      "apt-get update -y",
+      "apt-get install -y --no-install-recommends ubuntu-desktop"
+    ]
+  }]
+}

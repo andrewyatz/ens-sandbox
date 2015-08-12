@@ -1,0 +1,36 @@
+ {
+  "builders": [{
+    "type": "virtualbox-ovf",
+    "virtualbox_version_file": ".vbox_version",
+    "headless": false,
+
+    "source_path": "Ensembl81VirtualMachine.ova",
+
+    "import_flags" : ["--eula", "accept"],
+
+    "ssh_username": "user",
+    "ssh_password": "pass",
+    "ssh_port": 22,
+    "ssh_wait_timeout": "10000s",
+
+    "vboxmanage": [
+      ["modifyvm", "{{.Name}}", "--memory", "1024"],
+      ["modifyvm", "{{.Name}}", "--cpus", "1"],
+      ["modifyvm", "{{.Name}}", "--vram", "32"],
+      ["modifyvm", "{{.Name}}", "--accelerate3d", "on"]
+    ],
+
+    "format" : "ova",
+
+    "shutdown_command": "echo 'ensembl'|sudo -S /sbin/halt -h -p"
+  }],
+
+   "provisioners" : [{
+    "type": "shell",
+    "execute_command": "echo 'ensembl' | sudo -S sh '{{ .Path }}'",
+    "inline": [
+      "rm /var/lib/apt/lists/*",
+      "apt-get update -y"
+    ]
+  }]
+}
